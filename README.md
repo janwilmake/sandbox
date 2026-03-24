@@ -1,6 +1,6 @@
-Experiment: Can I have a cloudflare sandbox where the user is logged in into their own `stripe`, `git`, `gh` and `wrangler`, then expose the terminal with all the commands as a tool with proper sleeping built-in when the tool isn't used?
+Experiment: Can I have a cloudflare sandbox where the user is logged in into their own `stripe`, `git`, `gh` and `wrangler`, then expose the terminal with all the commands as a tool with proper sleeping built-in when the tool isn't used? [prompt](https://contextarea.com/rules-httpsraw-kaspqgmf8agwz1?key=result)
 
-https://contextarea.com/rules-httpsraw-kaspqgmf8agwz1?key=result
+Answer : YES!
 
 ![](screenshot.png)
 
@@ -12,4 +12,4 @@ What works
 
 What doesn't work
 
-- login into a coding agent
+- login into a coding agent using claude subscription (claude, pi)
