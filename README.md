@@ -13,3 +13,8 @@ What works
 What doesn't work
 
 - login into a coding agent using claude subscription (claude, pi)
+
+TODO:
+
+- remove claude logic entirely
+- expose command line interface as tool to an "ai" agent
