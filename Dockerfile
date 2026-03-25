@@ -33,7 +33,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Pre-create config dirs
 RUN mkdir -p /root/.config/gh \
              /root/.config/stripe \
-             /root/.wrangler/config \
+             /root/.wrangler \
              /root/.gitconfig.d \
              /root/.claude \
              /root/.npm
