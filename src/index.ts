@@ -18,6 +18,7 @@ const TERMINAL_SESSION_ID = "terminal";
 const ASSISTANT_SESSION_ID = "assistant";
 const ASSISTANT_CWD_FILE = "/tmp/assistant-cwd";
 const DEFAULT_SANDBOX_ENV = { IS_SANDBOX: "1" } as const;
+const SANDBOX_SLEEP_AFTER = "30m";
 const CHAT_MODEL = "claude-sonnet-4-6";
 const CHAT_SYSTEM_PROMPT = [
   "You are the CLI copilot for a Cloudflare sandbox.",
@@ -64,7 +65,10 @@ export default {
       return new Response("Missing sandbox id", { status: 400 });
     }
 
-    const sandbox = getSandbox(env.Sandbox, sandboxId, { normalizeId: true });
+    const sandbox = getSandbox(env.Sandbox, sandboxId, {
+      normalizeId: true,
+      sleepAfter: SANDBOX_SLEEP_AFTER
+    });
 
     // Terminal WebSocket
     if (
@@ -1152,6 +1156,10 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 let termSocket = null;
 let chatPending = false;
+let terminalReady = false;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let hasConnectedOnce = false;
 
 // ── Terminal ───────────────────────────────────────────────────────────────
 const term = new Terminal({
@@ -1164,31 +1172,91 @@ term.loadAddon(fit);
 term.loadAddon(new WebLinksAddon());
 term.open(document.getElementById('terminal'));
 fit.fit();
-window.addEventListener('resize', () => fit.fit());
+window.addEventListener('resize', () => {
+  fit.fit();
+  sendTerminalResize();
+});
 term.onData((data) => {
-  if (termSocket && termSocket.readyState === 1) {
+  if (terminalReady && termSocket && termSocket.readyState === 1) {
     termSocket.send(encoder.encode(data));
   }
 });
 
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function nextReconnectDelay() {
+  const baseDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
+  const jitter = Math.floor(Math.random() * 400);
+  reconnectAttempts += 1;
+  return baseDelay + jitter;
+}
+
+function sendTerminalResize() {
+  if (!terminalReady || !termSocket || termSocket.readyState !== 1) return;
+
+  const cols = Math.max(20, term.cols || 80);
+  const rows = Math.max(5, term.rows || 24);
+  termSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+}
+
+function scheduleReconnect() {
+  clearReconnectTimer();
+  const delay = nextReconnectDelay();
+  msg('Terminal disconnected. Reconnecting...');
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectTerm();
+  }, delay);
+}
+
 function connectTerm() {
+  clearReconnectTimer();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(proto + '//' + location.host + '/ws/terminal' + qs());
   ws.binaryType = 'arraybuffer';
   termSocket = ws;
+  terminalReady = false;
+  msg(hasConnectedOnce ? 'Reconnecting terminal...' : 'Connecting terminal...');
 
   ws.onopen = () => {
-    term.writeln('\\r\\n\\x1b[32mConnected to sandbox: ' + ID + '\\x1b[0m\\r\\n');
+    reconnectAttempts = 0;
+    msg('Terminal connected. Waiting for shell...');
   };
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') {
       // Control/status messages are JSON text frames
       try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'error') {
-          term.writeln('\\r\\n\\x1b[31mError: ' + msg.message + '\\x1b[0m');
+        const controlMessage = JSON.parse(e.data);
+        if (controlMessage.type === 'ready') {
+          const isReconnect = hasConnectedOnce;
+          terminalReady = true;
+          hasConnectedOnce = true;
+          sendTerminalResize();
+          term.writeln(
+            '\\r\\n\\x1b[32m' +
+              (isReconnect ? 'Reconnected to sandbox: ' : 'Connected to sandbox: ') +
+              ID +
+              '\\x1b[0m\\r\\n',
+          );
+          msg('Terminal ready.');
+          return;
         }
-        // Ignore 'ready', 'exit', etc. silently
+        if (controlMessage.type === 'error') {
+          terminalReady = false;
+          term.writeln('\\r\\n\\x1b[31mError: ' + controlMessage.message + '\\x1b[0m');
+          return;
+        }
+        if (controlMessage.type === 'exit') {
+          terminalReady = false;
+          msg('Terminal session ended.');
+          return;
+        }
+        // Ignore other control messages silently.
       } catch {
         term.write(e.data);
       }
@@ -1196,10 +1264,17 @@ function connectTerm() {
       term.write(new Uint8Array(e.data));
     }
   };
+  ws.onerror = () => {
+    msg('Terminal connection error.');
+  };
   ws.onclose = () => {
-    term.writeln('\\r\\n\\x1b[31mDisconnected.\\x1b[0m');
+    const wasReady = terminalReady;
+    terminalReady = false;
     if (termSocket === ws) termSocket = null;
-    setTimeout(connectTerm, 2000);
+    if (wasReady) {
+      term.writeln('\\r\\n\\x1b[33mConnection lost. Attempting to resume...\\x1b[0m');
+    }
+    scheduleReconnect();
   };
 }
 // Auto-boot on page load, then connect terminal
